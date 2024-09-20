@@ -1,0 +1,33 @@
+
+
+7th Sem. MP Interim Review-1 [2021 BATCH]
+1 message
+CSE PROJECT <cse-project@cgu-odisha.ac.in>	Sat, Aug 24, 2024 at 5:17 PM To: 2101020003@cgu-odisha.ac.in, 2101020001@cgu-odisha.ac.in, Rajshu Saurav <rajshusaurav@gmail.com>, 2101020490@cgu-odisha.ac.in, 2101020858@cgu-odisha.ac.in, 2101020502@cgu-odisha.ac.in, Sushree Sangita Panda
+<sushreesangitap2001@gmail.com>, 2101020261@cgu-odisha.ac.in, 2101020585@cgu-odisha.ac.in, Nikhil Gupta
+<ng82307@gmail.com>, 2101020449@cgu-odisha.ac.in, Kislay Rajput <mailmekislay.rajput@gmail.com>, Tithi Singh
+<tithisingh11@gmail.com>, Kaushika Sharma <kaushikasharma.78@gmail.com>, 2101020579@cgu-odisha.ac.in, 2101020576@cgu-odisha.ac.in, SEWALIN KAR <2101020398@cgu-odisha.ac.in>, 2101020518@cgu-odisha.ac.in, 2101020603@cgu-odisha.ac.in, cse-ta@cgu-odisha.ac.in, debendra.muduli@cgu-odisha.ac.in, santosh.sharma@cgu- odisha.ac.in, santoshinee.mohapatra@cgu-odisha.ac.in, abhipsa.mahala@cgu-odisha.ac.in, adyasha.rath@cgu- odisha.ac.in, anjana.mishra@cgu-odisha.ac.in, ashish.ranjan@cgu-odisha.ac.in, ayashkant.mishra@cgu-odisha.ac.in, bichitrananda.b@cgu-odisha.ac.in, chandank.panda@cgu-odisha.ac.in, dillip.rout@cgu-odisha.ac.in, HOD CSE
+<hod_cse@cgu-odisha.ac.in>, mamata.sahu@cgu-odisha.ac.in, mamata.wagh@cgu-odisha.ac.in, mamatadas@cgu- odisha.ac.in, manascse@cgu-odisha.ac.in, mohammad.qureshi@cgu-odisha.ac.in, mmishra@cgu-odisha.ac.in, nisha@cgu-odisha.ac.in, prabhat.dansena@cgu-odisha.ac.in, prasantdash@cgu-odisha.ac.in, priyanka.saha@cgu- odisha.ac.in, raj.vikram@cgu-odisha.ac.in, rakeshranjan@cgu-odisha.ac.in, ram.chandra@cgu-odisha.ac.in, sampa.sahoo@cgu-odisha.ac.in, soumya.sahoo@cgu-odisha.ac.in, mohanty.suchitra@cgu-odisha.ac.in, sukantabisoyi@cgu-odisha.ac.in, sumana.de@cgu-odisha.ac.in, supriya.panigrahi@cgu-odisha.ac.in, surendra.nanda@cgu-odisha.ac.in
+Cc: hod_csit@cgu-odisha.ac.in
+Dear Sir, Madam and Students,
+It is for the information of you all that the Interim Review 1 for 7th Sem. Major Project Stage- 1 will be conducted on 14-09-24 at 9.30 AM. (As mentioned in previous mail dated 24th July). Students will be evaluated based on their progress for accomplishment of their project work towards Stage-1.
+The evaluation components are as follows:
+
+
+
+ Understanding of Problem Statement (Breadth,Depth ) [5]Literature Review (Relevancy and Adequacy ) [10]Presentation (Ideation,Problem Formulation, Representation, Communication) [5]
+Total [20]
+Students are required to submit the design document (minimum 10 pages) to their
+respective guides before appearing Interim Review 1. This document should encompass the following components.
+(1) Problem speci?cation (maximum 100 words)
+(2) Introduction (maximum 300-400 words)
+(3) Literature survey (maximum 500-600 words)
+(4) Proposed solution with block diagram
+(5) Results and discussion
+
+The related notice is attached herewith. Detailed schedule along with venues for different panels will be communicated by 08-09-24. CRs are requested to circulate this information to all the related students.
+--
+Regards,
+Dr. Mamata Wagh Assistant Professor Project Coordinator STAAR Coordinator
+Department of Computer Science & Engineering
+C.V. Raman Global University, Bhubaneswar Odisha.
+Mob. No. - 9778455813
