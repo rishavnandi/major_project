@@ -1,0 +1,11 @@
+pandas
+nltk
+textblob
+vaderSentiment
+transformers
+streamlit
+matplotlib
+seaborn
+typing-extensions
+dataclasses; python_version<"3.7"
+pathlib
