@@ -9,3 +9,5 @@ seaborn
 typing-extensions
 dataclasses; python_version<"3.7"
 pathlib
+pytorch
+tensorflow
