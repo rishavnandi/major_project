@@ -1,5 +1,9 @@
 import pandas as pd
 import nltk
+# Download required resources
+nltk.download("punkt")
+nltk.download("averaged_perceptron_tagger")
+nltk.download("punkt_tab")
 from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from transformers import pipeline
