@@ -1,3 +1,6 @@
+from sklearn.metrics import confusion_matrix
+import plotly.figure_factory as ff
+import numpy as np
 from sklearn.metrics import mean_squared_error
 import logging
 from pathlib import Path
@@ -298,6 +301,83 @@ class DashboardVisualizer:
         st.pyplot(fig)
 
 
+class ConfusionMatrixAnalyzer:
+    """Handles confusion matrix calculations and visualizations"""
+
+    @staticmethod
+    def _convert_score_to_category(score: float) -> str:
+        """Convert numerical score to sentiment category"""
+        if score <= 2:
+            return "Negative"
+        elif score <= 3.5:
+            return "Neutral"
+        else:
+            return "Positive"
+
+    @staticmethod
+    def calculate_confusion_matrices(df: pd.DataFrame) -> Dict[str, np.ndarray]:
+        """Calculate confusion matrices for each model"""
+        # Convert actual scores to categories
+        actual_categories = df['totalScore'].apply(
+            ConfusionMatrixAnalyzer._convert_score_to_category
+        )
+
+        matrices = {}
+        categories = ['Negative', 'Neutral', 'Positive']
+
+        for model in ['textblob', 'vader', 'bert']:
+            # Get predicted categories from sentiment columns
+            predicted_categories = df[f'{model}_sentiment']
+
+            # Calculate confusion matrix
+            cm = confusion_matrix(
+                actual_categories,
+                predicted_categories,
+                labels=categories
+            )
+
+            # Normalize matrix
+            cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+            matrices[model] = cm_normalized
+
+        return matrices, categories
+
+    @staticmethod
+    def plot_confusion_matrices(confusion_matrices: Dict[str, np.ndarray],
+                                categories: List[str]) -> None:
+        """Plot confusion matrices using plotly"""
+        cols = st.columns(3)
+
+        for idx, (model, cm) in enumerate(confusion_matrices.items()):
+            # Create annotated heatmap
+            fig = ff.create_annotated_heatmap(
+                z=cm,
+                x=categories,
+                y=categories,
+                annotation_text=np.around(cm, decimals=2),
+                colorscale='Viridis'
+            )
+
+            # Update layout
+            fig.update_layout(
+                title=f"{model.upper()} Confusion Matrix",
+                xaxis_title="Predicted",
+                yaxis_title="Actual",
+                width=400,
+                height=400
+            )
+
+            # Fix axis labels
+            fig.update_layout(
+                xaxis={'side': 'bottom'},
+                yaxis={'side': 'left'}
+            )
+
+            # Display in appropriate column
+            with cols[idx]:
+                st.plotly_chart(fig)
+
+
 def main():
     """Main application function"""
     st.title("Enhanced Hospital Review Analysis Dashboard")
@@ -317,6 +397,37 @@ def main():
             aspect_metrics = AspectAnalyzer.calculate_aspect_metrics(aspect_df)
             accuracy_metrics = AspectAnalyzer.calculate_accuracy_metrics(
                 aspect_df)
+
+            # Confusion Matrix Analysis
+        st.header("Confusion Matrix Analysis")
+        st.write("""
+        These confusion matrices show how well each model's sentiment predictions align with 
+        the categorized actual ratings. The values show the proportion of each actual category 
+        that was predicted as each sentiment category.
+        """)
+
+        confusion_matrices, categories = ConfusionMatrixAnalyzer.calculate_confusion_matrices(
+            aspect_df)
+        ConfusionMatrixAnalyzer.plot_confusion_matrices(
+            confusion_matrices, categories)
+
+        # Add model performance summary based on confusion matrices
+        st.subheader("Model Performance Summary")
+
+        # Calculate accuracy for each model
+        model_accuracy = {}
+        for model, cm in confusion_matrices.items():
+            # Sum of diagonal elements / total
+            accuracy = np.trace(cm) / np.sum(cm)
+            model_accuracy[model] = accuracy
+
+        # Create summary table
+        summary_df = pd.DataFrame({
+            'Model': model_accuracy.keys(),
+            'Overall Accuracy': [f"{acc:.2%}" for acc in model_accuracy.values()]
+        })
+
+        st.table(summary_df)
 
         visualizer = DashboardVisualizer()
 
