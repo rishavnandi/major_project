@@ -1,4 +1,6 @@
 from sklearn.metrics import confusion_matrix
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from datetime import datetime
 import plotly.figure_factory as ff
 import numpy as np
 from sklearn.metrics import mean_squared_error
@@ -32,58 +34,139 @@ nltk.download("averaged_perceptron_tagger")
 
 @dataclass
 class SentimentResult:
-    """Data class to store sentiment analysis results"""
+    """Enhanced data class to store sentiment analysis results with confidence scores"""
     textblob: str
     vader: str
     bert: str
     textblob_score: float
     vader_score: float
     bert_score: float
+    confidence: float  # Added confidence score
+
+
+class DataNormalizer:
+    """Handles data normalization and preprocessing"""
+
+    def __init__(self):
+        self.score_scaler = MinMaxScaler(feature_range=(1, 5))
+        self.sentiment_scaler = StandardScaler()
+
+    def normalize_scores(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize numerical scores to a 1-5 range"""
+        score_columns = ['textblob_score',
+                         'vader_score', 'bert_score', 'totalScore']
+        df_normalized = df.copy()
+
+        for col in score_columns:
+            if col in df.columns:
+                shaped_data = df[col].values.reshape(-1, 1)
+                df_normalized[f'{col}_normalized'] = self.score_scaler.fit_transform(
+                    shaped_data)
+
+        return df_normalized
+
+    def normalize_text(self, text: str) -> str:
+        """Normalize text data by removing special characters and standardizing format"""
+        # Convert to lowercase
+        text = text.lower()
+
+        # Remove special characters but keep basic punctuation
+        text = ''.join(char for char in text if char.isalnum()
+                       or char in ' .,!?')
+
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+
+        return text
 
 
 class AspectDictionary:
-    """Manages aspect-related keywords and operations"""
+    """Enhanced aspect dictionary with weighted keywords and hierarchical categorization"""
     ASPECTS = {
-        "staff": ["staff", "doctor", "nurse", "receptionist", "physician", "specialist",
-                  "attendant", "caretaker", "surgeon", "therapist", "clinician"],
-        "cleanliness": ["clean", "dirty", "hygiene", "sanitary", "sanitation", "neat",
-                        "messy", "filthy", "tidy", "spotless", "dusty"],
-        "wait_time": ["wait", "time", "delay", "long", "quick", "queue", "waiting",
-                      "hours", "minutes", "fast", "slow", "prompt"],
-        "facilities": ["facility", "room", "equipment", "bed", "building", "amenities",
-                       "technology", "infrastructure", "parking", "restroom"],
-        "cost": ["cost", "price", "expensive", "affordable", "billing", "charges",
-                 "insurance", "payment", "fees", "overpriced"],
-        "communication": ["communication", "information", "explain", "informed", "clarity",
-                          "questions", "answers", "understand", "update"]
+        "staff": {
+            "keywords": {
+                "primary": ["staff", "doctor", "nurse", "receptionist", "physician"],
+                "secondary": ["specialist", "attendant", "caretaker", "surgeon", "therapist", "clinician"],
+                "related": ["team", "personnel", "medical team", "healthcare provider"]
+            },
+            "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}
+        },
+        "cleanliness": {
+            "keywords": {
+                "primary": ["clean", "dirty", "hygiene", "sanitary", "sanitation"],
+                "secondary": ["neat", "messy", "filthy", "tidy", "spotless"],
+                "related": ["dusty", "maintained", "sterile", "pristine"]
+            },
+            "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}
+        },
+        "wait_time": {
+            "keywords": {
+                "primary": ["wait", "waiting", "queue", "delay"],
+                "secondary": ["long", "quick", "fast", "slow"],
+                "related": ["hours", "minutes", "prompt", "time"]
+            },
+            "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}
+        },
+        "facilities": {
+            "keywords": {
+                "primary": ["facility", "room", "equipment", "building"],
+                "secondary": ["bed", "amenities", "technology", "infrastructure"],
+                "related": ["parking", "restroom", "modern", "outdated"]
+            },
+            "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}
+        },
+        "cost": {
+            "keywords": {
+                "primary": ["cost", "price", "expensive", "affordable"],
+                "secondary": ["billing", "charges", "insurance", "payment"],
+                "related": ["fees", "overpriced", "reasonable", "worth"]
+            },
+            "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}
+        },
+        "communication": {
+            "keywords": {
+                "primary": ["communication", "explain", "information", "informed"],
+                "secondary": ["clarity", "questions", "answers", "understand"],
+                "related": ["update", "responsive", "clear", "helpful"]
+            },
+            "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}
+        }
     }
 
     @classmethod
-    def get_aspects(cls) -> Dict[str, List[str]]:
+    def get_weighted_aspects(cls) -> Dict[str, Dict]:
         return cls.ASPECTS
 
 
 class SentimentAnalyzer:
-    """Handles multiple sentiment analysis methods"""
+    """Enhanced sentiment analyzer with confidence scoring and ensemble methods"""
 
     def __init__(self):
         self.vader_analyzer = SentimentIntensityAnalyzer()
         self.bert_analyzer = pipeline("sentiment-analysis",
                                       model="nlptown/bert-base-multilingual-uncased-sentiment")
+        self.normalizer = DataNormalizer()
 
-    def _convert_score_to_5_scale(self, score: float, model: str) -> float:
-        """Convert model-specific scores to 5-point scale"""
-        if model in ['textblob', 'vader']:  # -1 to 1 scale
-            return 2.5 + (score * 2.5)
-        elif model == 'bert':     # 1 to 5 scale
-            return float(score)
-        return score
+    def _calculate_confidence(self, scores: List[float]) -> float:
+        """Calculate confidence score based on agreement between models"""
+        score_std = np.std(scores)
+        # Higher agreement = higher confidence
+        confidence = 1 / (1 + score_std)
+        return float(confidence)
+
+    def _ensemble_score(self, scores: List[float], confidence: float) -> float:
+        """Calculate weighted ensemble score based on confidence"""
+        if confidence > 0.8:  # High agreement
+            return np.mean(scores)
+        else:  # Low agreement - weight BERT higher
+            weights = [0.2, 0.2, 0.6]  # TextBlob, VADER, BERT
+            return np.average(scores, weights=weights)
 
     def _analyze_textblob(self, text: str) -> Tuple[str, float]:
         """Analyze sentiment using TextBlob"""
         analysis = TextBlob(text)
         polarity = analysis.sentiment.polarity
-        score = self._convert_score_to_5_scale(polarity, 'textblob')
+        score = 2.5 + (polarity * 2.5)
         sentiment = "Positive" if polarity > 0.1 else "Negative" if polarity < -0.1 else "Neutral"
         return sentiment, score
 
@@ -91,7 +174,7 @@ class SentimentAnalyzer:
         """Analyze sentiment using VADER"""
         scores = self.vader_analyzer.polarity_scores(text)
         compound = scores['compound']
-        score = self._convert_score_to_5_scale(compound, 'vader')
+        score = 2.5 + (compound * 2.5)
         sentiment = "Positive" if compound > 0.05 else "Negative" if compound < -0.05 else "Neutral"
         return sentiment, score
 
@@ -100,20 +183,23 @@ class SentimentAnalyzer:
         result = self.bert_analyzer(text[:512])[0]
         label = int(result["label"].split()[0])
         score = float(label)
-
-        if label <= 2:
-            sentiment = "Negative"
-        elif label == 3:
-            sentiment = "Neutral"
-        else:
-            sentiment = "Positive"
+        sentiment = "Negative" if label <= 2 else "Neutral" if label == 3 else "Positive"
         return sentiment, score
 
     def analyze_text(self, text: str) -> SentimentResult:
-        """Analyze text using all sentiment analysis methods"""
-        textblob_sentiment, textblob_score = self._analyze_textblob(text)
-        vader_sentiment, vader_score = self._analyze_vader(text)
-        bert_sentiment, bert_score = self._analyze_bert(text)
+        """Analyze text using all sentiment analysis methods with confidence scoring"""
+        # Normalize text
+        normalized_text = self.normalizer.normalize_text(text)
+
+        # Get individual scores
+        textblob_sentiment, textblob_score = self._analyze_textblob(
+            normalized_text)
+        vader_sentiment, vader_score = self._analyze_vader(normalized_text)
+        bert_sentiment, bert_score = self._analyze_bert(normalized_text)
+
+        # Calculate confidence and ensemble score
+        scores = [textblob_score, vader_score, bert_score]
+        confidence = self._calculate_confidence(scores)
 
         return SentimentResult(
             textblob=textblob_sentiment,
@@ -121,54 +207,80 @@ class SentimentAnalyzer:
             bert=bert_sentiment,
             textblob_score=textblob_score,
             vader_score=vader_score,
-            bert_score=bert_score
+            bert_score=bert_score,
+            confidence=confidence
         )
 
 
 class ReviewAnalyzer:
-    """Handles the analysis of hospital reviews"""
+    """Enhanced review analyzer with advanced aspect extraction and sentiment analysis"""
 
     def __init__(self):
         self.sentiment_analyzer = SentimentAnalyzer()
-        self.aspect_dict = AspectDictionary.get_aspects()
+        self.aspect_dict = AspectDictionary.get_weighted_aspects()
+        self.normalizer = DataNormalizer()
 
-    def extract_aspects(self, text: str) -> List[str]:
-        """Extract aspects from review text"""
-        aspects = set()
-        tokens = nltk.word_tokenize(text.lower())
+    def extract_weighted_aspects(self, text: str) -> Dict[str, float]:
+        """Extract aspects with confidence scores based on keyword weights"""
+        aspects = {}
+        normalized_text = self.normalizer.normalize_text(text)
+        tokens = nltk.word_tokenize(normalized_text)
 
-        for word in tokens:
-            for aspect, keywords in self.aspect_dict.items():
-                if word in keywords:
-                    aspects.add(aspect)
-        return list(aspects)
+        for aspect, aspect_data in self.aspect_dict.items():
+            score = 0
+            hits = 0
+
+            for category, keywords in aspect_data["keywords"].items():
+                weight = aspect_data["weights"][category]
+                for keyword in keywords:
+                    if keyword in tokens:
+                        score += weight
+                        hits += 1
+
+            if hits > 0:
+                aspects[aspect] = score / hits
+
+        return aspects
 
     def analyze_reviews(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Analyze aspects and sentiments in reviews"""
+        """Analyze aspects and sentiments in reviews with normalization"""
         results = []
         total_rows = len(df)
         progress_bar = st.progress(0)
 
         for idx, (_, row) in enumerate(df.iterrows()):
-            aspects = self.extract_aspects(row["text"])
-            sentiments = self.sentiment_analyzer.analyze_text(row["text"])
+            try:
+                # Extract weighted aspects
+                aspects = self.extract_weighted_aspects(row["text"])
 
-            for aspect in aspects:
-                results.append({
-                    "hospital": row["title"],
-                    "totalScore": row["totalScore"],
-                    "aspect": aspect,
-                    "textblob_sentiment": sentiments.textblob,
-                    "vader_sentiment": sentiments.vader,
-                    "bert_sentiment": sentiments.bert,
-                    "textblob_score": sentiments.textblob_score,
-                    "vader_score": sentiments.vader_score,
-                    "bert_score": sentiments.bert_score
-                })
+                # Analyze sentiment
+                sentiments = self.sentiment_analyzer.analyze_text(row["text"])
 
-            progress_bar.progress((idx + 1) / total_rows)
+                # Add results for each aspect
+                for aspect, confidence in aspects.items():
+                    results.append({
+                        "hospital": row["title"],
+                        "totalScore": row["totalScore"],
+                        "aspect": aspect,
+                        "aspect_confidence": confidence,
+                        "textblob_sentiment": sentiments.textblob,
+                        "vader_sentiment": sentiments.vader,
+                        "bert_sentiment": sentiments.bert,
+                        "textblob_score": sentiments.textblob_score,
+                        "vader_score": sentiments.vader_score,
+                        "bert_score": sentiments.bert_score,
+                        "sentiment_confidence": sentiments.confidence
+                    })
 
-        return pd.DataFrame(results)
+                progress_bar.progress((idx + 1) / total_rows)
+
+            except Exception as e:
+                logger.error(f"Error processing review {idx}: {str(e)}")
+                continue
+
+        # Create DataFrame and normalize scores
+        results_df = pd.DataFrame(results)
+        return self.normalizer.normalize_scores(results_df)
 
 
 class AspectAnalyzer:
