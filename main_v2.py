@@ -1,19 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Hospital Review Analysis Dashboard (Minimal Refactor v2)
+Hospital Review Analysis Dashboard (Minimal Refactor v3 - Ensemble)
 
 Analyzes patient reviews for sentiment and aspects, focusing on core functionality,
-data cleaning, and error fixes.
+data cleaning, error fixes, and adding a weighted ensemble score.
 """
 
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import confusion_matrix, mean_squared_error
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from transformers import pipeline, Pipeline as HFPipeline
-from textblob import TextBlob
-from nltk.tokenize import word_tokenize
-from nltk.stem import WordNetLemmatizer
-from nltk.corpus import stopwords, wordnet
 import logging
 import time
 from dataclasses import dataclass
@@ -27,10 +19,16 @@ import seaborn as sns
 import streamlit as st
 # NLTK imports
 import nltk
-nltk.download('punkt_tab')
-nltk.download('averaged_perceptron_tagger_eng')
+from nltk.corpus import stopwords, wordnet
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 # Sentiment Analysis Libraries
+from textblob import TextBlob
+from transformers import pipeline, Pipeline as HFPipeline
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 # Scikit-learn imports
+from sklearn.metrics import confusion_matrix, mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
 
 # --- Configuration & Constants ---
 
@@ -38,10 +36,10 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# NLTK Resource Management - Ensuring 'punkt' is listed
+# NLTK Resource Management
 NLTK_RESOURCES = {
     "corpora": ["stopwords", "wordnet", "omw-1.4"],
-    "tokenizers": ["punkt"],  # Explicitly ensure punkt is here
+    "tokenizers": ["punkt"],
     "taggers": ["averaged_perceptron_tagger"],
     "sentiment": ["vader_lexicon"],
 }
@@ -49,6 +47,7 @@ NLTK_RESOURCES = {
 # Model Identifiers & Column Naming
 TEXTBLOB, VADER, BERT = "textblob", "vader", "bert"
 SENTIMENT_MODELS = [TEXTBLOB, VADER, BERT]
+ENSEMBLE = "ensemble"  # New identifier
 RAW_SCORE_SUFFIX = "_score"
 SENTIMENT_SUFFIX = "_sentiment"
 
@@ -59,7 +58,7 @@ SENTIMENT_CATEGORIES = [NEGATIVE, NEUTRAL, POSITIVE]
 BERT_MODEL_NAME = "nlptown/bert-base-multilingual-uncased-sentiment"
 MIN_REVIEW_WORDS = 3  # Filter out very short reviews
 
-# Aspect Keywords (Simplified from Class) - Keep as is
+# Aspect Keywords (Simplified from Class)
 ASPECT_KEYWORDS = {
     "staff": {"keywords": {"primary": ["staff", "doctor", "nurse", "receptionist", "physician", "provider"], "secondary": ["specialist", "attendant", "caretaker", "surgeon", "therapist", "consultant"], "related": ["team", "personnel", "medical team", "healthcare provider", "employee"]}, "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}},
     "cleanliness": {"keywords": {"primary": ["clean", "dirty", "hygiene", "sanitary", "sanitation", "sterile"], "secondary": ["neat", "messy", "filthy", "tidy", "spotless", "immaculate"], "related": ["dusty", "maintained", "pristine", "unclean"]}, "weights": {"primary": 1.0, "secondary": 0.8, "related": 0.6}},
@@ -77,7 +76,6 @@ def download_nltk_resources():
     for resource_type, resources in NLTK_RESOURCES.items():
         for resource in resources:
             try:
-                # Construct the path based on type for nltk.data.find
                 path_prefix = ""
                 if resource_type == "corpora":
                     path_prefix = f"corpora/{resource}"
@@ -88,18 +86,15 @@ def download_nltk_resources():
                 elif resource_type == "sentiment":
                     path_prefix = f"sentiment/{resource}"
                 else:
-                    path_prefix = resource  # Fallback for potential other types
-
-                if path_prefix:  # Only search if we constructed a path
+                    path_prefix = resource
+                if path_prefix:
                     nltk.data.find(path_prefix)
                     logger.debug(f"NLTK resource '{resource}' found.")
                 else:
                     logger.warning(
                         f"Unknown NLTK resource type for '{resource}'. Skipping check.")
-
             except LookupError:
                 logger.info(f"Downloading NLTK resource: {resource}")
-                # Consider removing quiet=True temporarily if downloads fail silently
                 nltk.download(resource, quiet=True)
             except Exception as e:
                 logger.error(
@@ -144,10 +139,9 @@ class TextPreprocessor:
         return ' '.join(text.split())
 
     def tokenize_and_lemmatize(self, text: str) -> List[str]:
-        """Tokenize, POS tag, lemmatize, remove stopwords."""
         try:
             normalized_text = self.normalize_text(text)
-            tokens = word_tokenize(normalized_text)  # This requires 'punkt'
+            tokens = word_tokenize(normalized_text)
             tagged_tokens = nltk.pos_tag(tokens)
             return [
                 self.lemmatizer.lemmatize(word, self.get_wordnet_pos(tag))
@@ -155,11 +149,10 @@ class TextPreprocessor:
             ]
         except LookupError as e:
             logger.error(
-                f"NLTK resource missing during tokenization: {e}. Ensure 'punkt' is downloaded.")
-            # Return normalized text split by space as a fallback
+                f"NLTK resource missing: {e}. Check 'punkt'. Fallback split.")
             return [word for word in self.normalize_text(text).split() if word.isalpha() and word not in self.stop_words]
         except Exception as e:
-            logger.error(f"Error during tokenization/lemmatization: {e}")
+            logger.error(f"Tokenization/Lemmatization error: {e}")
             return [word for word in self.normalize_text(text).split() if word.isalpha() and word not in self.stop_words]
 
 
@@ -224,7 +217,6 @@ class SentimentAnalyzer:
             sentiment = POSITIVE if polarity > 0.1 else NEGATIVE if polarity < -0.1 else NEUTRAL
             return sentiment, score
         except Exception as e:
-            # Debug level for less critical errors
             logger.debug(f"TextBlob failed: {e}")
             return NEUTRAL, 2.5
 
@@ -240,13 +232,11 @@ class SentimentAnalyzer:
 
     def _analyze_bert(self, text: str) -> Tuple[str, float]:
         try:
-            # Handle potential long text for BERT
             result = self.bert_analyzer(text[:512])[0]
             score = float(result["label"].split()[0])  # Star rating 1-5
             sentiment = POSITIVE if score >= 4 else NEGATIVE if score <= 2 else NEUTRAL
             return sentiment, score
         except Exception as e:
-            # Log BERT errors more prominently
             logger.error(f"BERT analysis failed: {e}", exc_info=False)
             return NEUTRAL, 3.0
 
@@ -254,8 +244,6 @@ class SentimentAnalyzer:
         if not isinstance(text, str) or not text.strip():
             return SentimentResult(NEUTRAL, NEUTRAL, NEUTRAL, 2.5, 2.5, 3.0, 0.0)
 
-        # Reuse normalized text if needed, but models usually handle raw better
-        # normalized_text = self.text_preprocessor.normalize_text(text)
         tb_sentiment, tb_score = self._analyze_textblob(text)
         vader_sentiment, vader_score = self._analyze_vader(text)
         bert_sentiment, bert_score = self._analyze_bert(text)
@@ -280,7 +268,6 @@ class ReviewAnalyzer:
         logger.info("ReviewAnalyzer initialized.")
 
     def _prepare_aspect_keywords(self, aspect_dict: Dict) -> Dict:
-        # (Keep this method as is from previous version)
         processed_aspects = {}
         logger.info("Lemmatizing aspect keywords...")
         for aspect, data in aspect_dict.items():
@@ -289,7 +276,6 @@ class ReviewAnalyzer:
             for category, keywords in data["keywords"].items():
                 lemmatized_set = set()
                 for keyword in keywords:
-                    # Simple lemmatization for keywords
                     lemmatized_words = " ".join(
                         self.text_preprocessor.lemmatizer.lemmatize(kw) for kw in keyword.split())
                     if lemmatized_words:
@@ -300,7 +286,6 @@ class ReviewAnalyzer:
         return processed_aspects
 
     def extract_aspects(self, text: str) -> Dict[str, float]:
-        # (Keep this method as is from previous version)
         if not isinstance(text, str) or not text.strip():
             return {}
         lemmatized_tokens = self.text_preprocessor.tokenize_and_lemmatize(text)
@@ -329,21 +314,15 @@ class ReviewAnalyzer:
         progress_bar = st.progress(0, text="Initializing analysis...")
         start_time = time.time()
 
-        # FIX: Use enumerate for progress calculation
         for loop_idx, (df_index, row) in enumerate(df.iterrows()):
-            # Calculate progress value safely
-            progress_value = (loop_idx + 1) / total_rows
-            # Ensure value doesn't exceed 1.0
-            progress_value = min(progress_value, 1.0)
+            progress_value = min((loop_idx + 1) / total_rows, 1.0)
             progress_text = f"Processing review {loop_idx + 1}/{total_rows}..."
-
-            if loop_idx % 50 == 0 or loop_idx == total_rows - 1:  # Update even less often
+            if loop_idx % 50 == 0 or loop_idx == total_rows - 1:
                 try:
                     progress_bar.progress(progress_value, text=progress_text)
                 except Exception as progress_error:
-                    # Log progress bar specific errors but continue analysis
                     logger.warning(
-                        f"Progress bar update failed at index {loop_idx}: {progress_error}")
+                        f"Progress bar update failed: {progress_error}")
 
             try:
                 review_text = row["text"]
@@ -351,14 +330,9 @@ class ReviewAnalyzer:
                 sentiments = _self.sentiment_analyzer.analyze_text(review_text)
 
                 aspect_base = {
-                    "hospital": row["title"],
-                    "totalScore": row["totalScore"],
-                    f"{TEXTBLOB}{SENTIMENT_SUFFIX}": sentiments.textblob,
-                    f"{VADER}{SENTIMENT_SUFFIX}": sentiments.vader,
-                    f"{BERT}{SENTIMENT_SUFFIX}": sentiments.bert,
-                    f"{TEXTBLOB}{RAW_SCORE_SUFFIX}": sentiments.textblob_score,
-                    f"{VADER}{RAW_SCORE_SUFFIX}": sentiments.vader_score,
-                    f"{BERT}{RAW_SCORE_SUFFIX}": sentiments.bert_score,
+                    "hospital": row["title"], "totalScore": row["totalScore"],
+                    f"{TEXTBLOB}{SENTIMENT_SUFFIX}": sentiments.textblob, f"{VADER}{SENTIMENT_SUFFIX}": sentiments.vader, f"{BERT}{SENTIMENT_SUFFIX}": sentiments.bert,
+                    f"{TEXTBLOB}{RAW_SCORE_SUFFIX}": sentiments.textblob_score, f"{VADER}{RAW_SCORE_SUFFIX}": sentiments.vader_score, f"{BERT}{RAW_SCORE_SUFFIX}": sentiments.bert_score,
                     "sentiment_confidence": sentiments.confidence,
                 }
 
@@ -371,29 +345,22 @@ class ReviewAnalyzer:
                             {**aspect_base, "aspect": aspect, "aspect_confidence": confidence})
 
             except Exception as e:
-                # Log error with original DataFrame index if helpful for debugging specific rows
                 logger.error(
                     f"Error processing review index {df_index}: {e}", exc_info=False)
-                continue
-
-        # Final progress update (outside the loop)
         try:
             progress_bar.progress(1.0, text="Analysis complete.")
         except Exception as progress_error:
             logger.warning(
                 f"Final progress bar update failed: {progress_error}")
-
         logger.info(
             f"Analyzed {len(results)} entries in {time.time() - start_time:.2f}s.")
-        progress_bar.empty()  # Clear the progress bar
-
+        progress_bar.empty()
         if not results:
             return pd.DataFrame()
         results_df = pd.DataFrame(results)
-
         return results_df
 
-# --- AnalysisUtils & Visualizer (Keep as is from previous version) ---
+# --- AnalysisUtils & Visualizer (Classes remain the same) ---
 
 
 class AnalysisUtils:
@@ -404,7 +371,6 @@ class AnalysisUtils:
         metrics = []
         grouped = df.groupby(['hospital', 'aspect'])
         bert_sentiment_col = f"{BERT}{SENTIMENT_SUFFIX}"
-
         for (hospital, aspect), group in grouped:
             metrics.append({
                 "hospital": hospital, "aspect": aspect, "mentions": len(group),
@@ -421,20 +387,25 @@ class AnalysisUtils:
         return pd.DataFrame(metrics).round(2)
 
     @staticmethod
-    def calculate_accuracy_metrics(df: pd.DataFrame) -> Dict:
-        metrics = {model: {} for model in SENTIMENT_MODELS}
+    def calculate_accuracy_metrics(df: pd.DataFrame, model_list: List[str] = SENTIMENT_MODELS) -> Dict:
+        """Calculates accuracy for specified models (or default SENTIMENT_MODELS)."""
+        metrics = {model: {} for model in model_list}
         if df.empty or 'totalScore' not in df.columns:
             return metrics
         actual_scores = df['totalScore']
         can_correlate = actual_scores.nunique() > 1
 
-        for model in SENTIMENT_MODELS:
+        for model in model_list:
             score_col = f'{model}{RAW_SCORE_SUFFIX}'
             if score_col not in df.columns:
+                logger.warning(
+                    f"Accuracy: Score column '{score_col}' not found for '{model}'.")
                 continue
             predicted_scores = df[score_col]
             valid = actual_scores.notna() & predicted_scores.notna()
             if not valid.any():
+                logger.warning(
+                    f"Accuracy: No valid scores to compare for '{model}'.")
                 continue
 
             actual_valid, predicted_valid = actual_scores[valid], predicted_scores[valid]
@@ -499,24 +470,38 @@ class Visualizer:
     @staticmethod
     @st.cache_data
     def plot_accuracy_metrics(metrics: Dict):
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        # Include ensemble if present
+        # Filter out empty metric dicts
+        valid_metrics = {k: v for k, v in metrics.items() if v}
+        if not valid_metrics:
+            st.warning("No accuracy metrics available to plot.")
+            return
+
+        models = list(valid_metrics.keys())
+        num_plots = 3
+        fig, axes = plt.subplots(1, num_plots, figsize=(6 * num_plots, 5))
         fig.suptitle("Model Performance Comparison", fontsize=16)
-        models = list(metrics.keys())
+        axes = [axes] if num_plots == 1 else axes  # Ensure iterable
+
         plot_data = {
-            'MSE (Lower Better)': [metrics[m].get('mse', np.nan) for m in models],
-            'Acc (±1pt, Higher Better)': [metrics[m].get('tolerance_accuracy', np.nan) * 100 for m in models],
-            'Corr (vs Score, Higher Better)': [metrics[m].get('correlation', np.nan) for m in models]
+            'MSE (Lower Better)': [valid_metrics[m].get('mse', np.nan) for m in models],
+            'Acc (±1pt, Higher Better)': [valid_metrics[m].get('tolerance_accuracy', np.nan) * 100 for m in models],
+            'Corr (vs Score, Higher Better)': [valid_metrics[m].get('correlation', np.nan) for m in models]
         }
         ylabels = ['MSE', 'Accuracy (%)', 'Correlation']
+
         for i, ((title, values), ylabel) in enumerate(zip(plot_data.items(), ylabels)):
-            valid_models = [m for m, v in zip(models, values) if pd.notna(v)]
-            valid_values = [v for v in values if pd.notna(v)]
-            if valid_models:
-                sns.barplot(x=valid_models, y=valid_values,
+            valid_plot_models = [m for m, v in zip(
+                models, values) if pd.notna(v)]
+            valid_plot_values = [v for v in values if pd.notna(v)]
+
+            if valid_plot_models:
+                sns.barplot(x=valid_plot_models, y=valid_plot_values,
                             ax=axes[i], palette='viridis')
                 axes[i].tick_params(axis='x', rotation=15)
                 for container in axes[i].containers:
-                    axes[i].bar_label(container, fmt='%.2f', fontsize=9)
+                    axes[i].bar_label(container, fmt='%.2f',
+                                      fontsize=9, padding=2)
             else:
                 axes[i].text(0.5, 0.5, 'No data', ha='center', va='center')
             axes[i].set_title(title)
@@ -529,18 +514,20 @@ class Visualizer:
     def plot_score_comparison(df: pd.DataFrame):
         if df.empty or 'totalScore' not in df.columns:
             return
-        num_models = len(SENTIMENT_MODELS)
+        # Add ensemble score if it exists
+        models_to_plot = SENTIMENT_MODELS + \
+            ([ENSEMBLE]
+             if f'{ENSEMBLE}{RAW_SCORE_SUFFIX}' in df.columns else [])
+        num_models = len(models_to_plot)
         fig, axes = plt.subplots(1, num_models, figsize=(
-            6 * num_models, 5), sharey=True, sharex=True)
+            5 * num_models, 5), sharey=True, sharex=True)
         fig.suptitle("Predicted Score vs. Actual Score", fontsize=16)
         axes = [axes] if num_models == 1 else axes
         actual = df['totalScore']
-        min_score, max_score = df['totalScore'].min(
-        ), df['totalScore'].max()  # Use actual data range
-        # Add buffer, ensure 0-5+ range
+        min_score, max_score = df['totalScore'].min(), df['totalScore'].max()
         plot_min, plot_max = min(0, min_score - 0.5), max(5.5, max_score + 0.5)
 
-        for idx, model in enumerate(SENTIMENT_MODELS):
+        for idx, model in enumerate(models_to_plot):
             score_col = f'{model}{RAW_SCORE_SUFFIX}'
             if score_col in df.columns:
                 predicted = df[score_col]
@@ -621,7 +608,7 @@ class Visualizer:
 
 @st.cache_data(show_spinner="Loading and cleaning data...", persist=True)
 def load_data(file):
-    # (Keep this function as is from previous version - it includes cleaning)
+    # (Keep as is from previous version)
     try:
         df = pd.read_csv(file)
         logger.info(f"Original DataFrame shape: {df.shape}")
@@ -630,44 +617,36 @@ def load_data(file):
             missing = [col for col in required_cols if col not in df.columns]
             st.error(f"CSV missing required columns: {', '.join(missing)}.")
             return None
-
         initial_rows = len(df)
         df.dropna(subset=required_cols, inplace=True)
         logger.info(
             f"Dropped {initial_rows - len(df)} rows with missing required values.")
-
         df['text'] = df['text'].astype(str).str.strip()
         df['title'] = df['title'].astype(str).str.strip()
         df['totalScore'] = pd.to_numeric(df['totalScore'], errors='coerce')
-
         initial_rows = len(df)
         df.dropna(subset=['totalScore'], inplace=True)
         logger.info(
             f"Dropped {initial_rows - len(df)} rows with non-numeric 'totalScore'.")
-
         initial_rows = len(df)
         df.drop_duplicates(inplace=True)
         logger.info(f"Dropped {initial_rows - len(df)} exact duplicate rows.")
-
         initial_rows = len(df)
         df.drop_duplicates(subset=['title', 'text'],
                            keep='first', inplace=True)
         logger.info(
             f"Dropped {initial_rows - len(df)} duplicate reviews (same text/title).")
-
         initial_rows = len(df)
         df['word_count'] = df['text'].apply(lambda x: len(str(x).split()))
         df = df[df['word_count'] >= MIN_REVIEW_WORDS]
         df.drop(columns=['word_count'], inplace=True)
         logger.info(
             f"Dropped {initial_rows - len(df)} rows with < {MIN_REVIEW_WORDS} words.")
-
         logger.info(f"Cleaned DataFrame shape: {df.shape}")
         if df.empty:
             st.error("No valid data remaining after cleaning.")
             return None
         return df
-
     except pd.errors.EmptyDataError:
         st.error("Uploaded CSV is empty.")
         return None
@@ -695,18 +674,32 @@ def main():
 
     try:
         analyzer = ReviewAnalyzer()
-        analyzed_df = analyzer.analyze_reviews(input_df)
+        analyzed_df = analyzer.analyze_reviews(input_df)  # This is cached
 
         if analyzed_df.empty:
             st.error("Analysis produced no results. Check input data quality.")
             return
 
-        # --- Metrics Calculation ---
+        # --- Ensemble Score Calculation ---
+        ensemble_metrics = {}  # Initialize empty
+        if not analyzed_df.empty:
+            weights = {BERT: 0.6, VADER: 0.3, TEXTBLOB: 0.1}  # Example weights
+            analyzed_df[f'{ENSEMBLE}{RAW_SCORE_SUFFIX}'] = (
+                weights[BERT] * analyzed_df.get(f"{BERT}{RAW_SCORE_SUFFIX}", 0) +
+                weights[VADER] * analyzed_df.get(f"{VADER}{RAW_SCORE_SUFFIX}", 0) +
+                weights[TEXTBLOB] *
+                analyzed_df.get(f"{TEXTBLOB}{RAW_SCORE_SUFFIX}", 0)
+            )
+            # Calculate metrics specifically for the ensemble score
+            ensemble_metrics = AnalysisUtils.calculate_accuracy_metrics(
+                analyzed_df, model_list=[ENSEMBLE])
+
+        # --- Metrics Calculation (Individual Models) ---
         with st.spinner("Calculating metrics..."):
             aspect_metrics_df = AnalysisUtils.calculate_aspect_metrics(
                 analyzed_df)
             accuracy_metrics = AnalysisUtils.calculate_accuracy_metrics(
-                analyzed_df)
+                analyzed_df, model_list=SENTIMENT_MODELS)  # Calculate for individual models
             confusion_matrices, categories = AnalysisUtils.calculate_confusion_matrices(
                 analyzed_df)
 
@@ -715,30 +708,39 @@ def main():
 
         # --- Results Display ---
         st.header("📊 Model Performance Evaluation")
+        # Add Ensemble to the accuracy metrics dict for display
+        all_accuracy_metrics = {**accuracy_metrics, **ensemble_metrics}
+
         tab_perf1, tab_perf2, tab_perf3 = st.tabs(
             ["Confusion Matrices", "Accuracy Metrics", "Score Comparison"])
 
         with tab_perf1:
-            st.subheader("Confusion Matrix Analysis")
+            st.subheader("Confusion Matrix Analysis (Individual Models)")
             st.markdown(
                 "Compares model predictions vs. actual score categories (Normalized by Row). Diagonal = agreement.")
             Visualizer.plot_confusion_matrices(confusion_matrices, categories)
 
         with tab_perf2:
-            st.subheader("Accuracy Metrics")
+            st.subheader("Accuracy Metrics (vs Original Score)")
+            # Display table including ensemble
             metrics_display = pd.DataFrame({
                 model: {
                     'MSE': f"{mets.get('mse', np.nan):.3f}",
                     'Acc (±1pt)': f"{mets.get('tolerance_accuracy', 0)*100:.1f}%",
                     'Corr': f"{mets.get('correlation', np.nan):.3f}"
-                } for model, mets in accuracy_metrics.items() if mets
+                    # Check if metric dict exists
+                } for model, mets in all_accuracy_metrics.items() if mets
             }).transpose().fillna("N/A")
             metrics_display.index.name = "Model"
+            metrics_display = metrics_display.reindex(
+                [ENSEMBLE] + SENTIMENT_MODELS)  # Ensure ensemble is first
             st.table(metrics_display)
-            Visualizer.plot_accuracy_metrics(accuracy_metrics)
+            # Plot including ensemble
+            Visualizer.plot_accuracy_metrics(all_accuracy_metrics)
 
         with tab_perf3:
             st.subheader("Predicted vs Actual Score Scatter Plot")
+            # Plot including ensemble
             Visualizer.plot_score_comparison(analyzed_df)
 
         st.markdown("---")
@@ -748,7 +750,8 @@ def main():
             ["Overall Analysis", "Hospital Specific"])
 
         with tab_overall:
-            st.subheader("Overall Sentiment Distribution by Aspect")
+            st.subheader(
+                "Overall Sentiment Distribution by Aspect (Individual Models)")
             Visualizer.plot_sentiment_distribution(
                 analyzed_df, "Overall Sentiment Distribution")
 
@@ -764,15 +767,10 @@ def main():
                     display_metrics_overall = aspect_metrics_df.sort_values(
                         by=sort_metric_overall, ascending=False)
                 else:
-                    display_metrics_overall = aspect_metrics_df  # No valid sort key
-
-                # Use st.dataframe for better display control
+                    display_metrics_overall = aspect_metrics_df
                 st.dataframe(display_metrics_overall.style.format({
                     col: "{:.1f}%" for col in ['positive_pct', 'negative_pct', 'neutral_pct'] if col in display_metrics_overall}
-                    # Handle NaN formatting
-                    | {col: "{:.2f}" for col in display_metrics_overall.select_dtypes(include=np.number).columns if 'pct' not in col}, na_rep='N/A'),
-                    use_container_width=True)
-
+                    | {col: "{:.2f}" for col in display_metrics_overall.select_dtypes(include=np.number).columns if 'pct' not in col}, na_rep='N/A'), use_container_width=True)
             else:
                 st.warning("No aspect metrics calculated.")
 
@@ -801,14 +799,12 @@ def main():
                         if not hospital_metrics_data.empty:
                             st.dataframe(hospital_metrics_data.style.format({
                                 col: "{:.1f}%" for col in ['positive_pct', 'negative_pct', 'neutral_pct'] if col in hospital_metrics_data}
-                                | {col: "{:.2f}" for col in hospital_metrics_data.select_dtypes(include=np.number).columns if 'pct' not in col}, na_rep='N/A'),
-                                use_container_width=True)
+                                | {col: "{:.2f}" for col in hospital_metrics_data.select_dtypes(include=np.number).columns if 'pct' not in col}, na_rep='N/A'), use_container_width=True)
                         else:
                             st.info(
                                 "No specific aspect metrics for this hospital.")
 
     except Exception as e:
-        # Display the primary error clearly if it's StreamlitAPIException
         if isinstance(e, st.errors.StreamlitAPIException) and "Progress Value has invalid value" in str(e):
             st.error(
                 f"Analysis stopped due to a progress bar calculation issue: {e}")
