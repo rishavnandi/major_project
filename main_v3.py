@@ -6,6 +6,7 @@ from nltk.tokenize import sent_tokenize
 import plotly.express as px
 import numpy as np
 import re  # For basic cleaning
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 # --- NLTK Setup ---
 # Download required NLTK data (run only once)
@@ -20,7 +21,7 @@ except nltk.downloader.DownloadError:
     nltk.download('punkt')
 
 # --- Constants and Configuration ---
-DATA_FILE = 'short_dataset.csv'  # Make sure this file is in the same directory
+DATA_FILE = 'dataset_v2.csv'  # Path to your dataset
 
 ASPECT_KEYWORDS = {
     'Behaviour/Staff': ['staff', 'nurse', 'doctor', 'behavior', 'behaviour', 'rude', 'polite', 'friendly', 'cooperative', 'attitude', 'empathy', 'unprofessional', 'professional', 'caring', 'kind', 'attentive', 'irresponsible', 'helpful', 'supportive', 'compassion', 'communication'],
@@ -178,6 +179,10 @@ st.sidebar.markdown("Aspects Analyzed:")
 for aspect in ASPECT_KEYWORDS.keys():
     st.sidebar.markdown(f"- {aspect}")
 
+st.sidebar.markdown("---")
+enable_comparison = st.sidebar.checkbox(
+    "Enable Hospital Comparison", value=False)
+
 # --- Main Content ---
 
 # === Overall Analysis ===
@@ -214,6 +219,31 @@ if analysis_mode == "Overall Analysis":
     *Note: This is not an 'accuracy' score in the ML sense, but an indicator of alignment between the provided score and the calculated text sentiment.*
     """)
 
+    # Calculate additional metrics
+    # Normalize VADER scores to 1-5 scale to match Google scores
+    scaled_sentiment = (
+        hospital_data['Average Review Sentiment (VADER)'] + 1) * 2 + 1
+    mse = mean_squared_error(
+        hospital_data['Average Google Score'], scaled_sentiment)
+    mae = mean_absolute_error(
+        hospital_data['Average Google Score'], scaled_sentiment)
+    rmse = np.sqrt(mse)
+
+    # Display metrics in columns
+    metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+    metrics_col1.metric("Mean Squared Error", f"{mse:.3f}")
+    metrics_col2.metric("Mean Absolute Error", f"{mae:.3f}")
+    metrics_col3.metric("Root Mean Squared Error", f"{rmse:.3f}")
+
+    st.markdown("""
+    These metrics measure how closely our sentiment scores (scaled to match the 1-5 star rating) 
+    align with the actual Google ratings:
+    - **Lower values** indicate better alignment between calculated sentiment and user ratings
+    - MSE penalizes larger errors more heavily
+    - MAE represents the average absolute difference between predicted and actual ratings
+    - RMSE is the square root of MSE and is in the same units as the ratings
+    """)
+
     fig_corr = px.scatter(hospital_data, x='Average Google Score', y='Average Review Sentiment (VADER)',
                           hover_data=['Hospital Name', 'Number of Reviews'],
                           title='Average Google Score vs. Average VADER Sentiment per Hospital',
@@ -223,6 +253,42 @@ if analysis_mode == "Overall Analysis":
 
     st.subheader("Overall Hospital Data")
     st.dataframe(hospital_data.round(3), use_container_width=True)
+
+    st.subheader("Aspect Sentiment Heatmap")
+    st.markdown(
+        "This heatmap shows sentiment scores across different aspects for all hospitals.")
+
+    # Create a pivot table for the heatmap
+    aspect_columns = [
+        col for col in hospital_data.columns if 'Average Sentiment' in col]
+
+    # Melt the dataframe to long format for easier pivoting
+    melted_df = pd.melt(hospital_data,
+                        id_vars=['Hospital Name'],
+                        value_vars=aspect_columns,
+                        var_name='Aspect',
+                        value_name='Sentiment Score')
+
+    # Extract the aspect name from the column name
+    melted_df['Aspect'] = melted_df['Aspect'].str.replace(
+        ' Average Sentiment', '')
+
+    # Create the pivot table
+    heatmap_data = melted_df.pivot(index='Hospital Name',
+                                   columns='Aspect',
+                                   values='Sentiment Score')
+
+    # Create the heatmap using px
+    fig_heatmap = px.imshow(heatmap_data,
+                            labels=dict(x="Aspect", y="Hospital",
+                                        color="Sentiment Score"),
+                            x=heatmap_data.columns,
+                            y=heatmap_data.index,
+                            color_continuous_scale=px.colors.diverging.RdBu_r,
+                            range_color=[-1, 1],
+                            title="Hospital Sentiment Scores by Aspect")
+
+    st.plotly_chart(fig_heatmap, use_container_width=True)
 
 
 # === Hospital Specific Analysis ===
@@ -313,36 +379,153 @@ elif analysis_mode == "Hospital Specific Analysis":
 # === Aspect Ranking ===
 elif analysis_mode == "Aspect Ranking":
     st.header("Hospital Ranking by Aspect Sentiment")
-    aspect_list = list(ASPECT_KEYWORDS.keys())
-    selected_aspect = st.selectbox(
-        "Select an Aspect to Rank Hospitals By", aspect_list)
+
+    # Add filter columns
+    filter_col1, filter_col2 = st.columns(2)
+
+    with filter_col1:
+        aspect_list = list(ASPECT_KEYWORDS.keys())
+        selected_aspect = st.selectbox(
+            "Select an Aspect to Rank Hospitals By", aspect_list)
+
+    with filter_col2:
+        min_reviews = st.slider("Minimum Number of Reviews",
+                                min_value=1,
+                                max_value=int(
+                                    hospital_data['Number of Reviews'].max()),
+                                value=5)
+
+    # Add radio option for sorting
+    sort_option = st.radio(
+        "Sort hospitals by:",
+        ["Highest Sentiment First", "Lowest Sentiment First", "Most Mentions First"]
+    )
 
     if selected_aspect:
         sentiment_col = f'{selected_aspect} Average Sentiment'
         mention_col = f'{selected_aspect} Mention (%)'
 
         # Filter hospitals where the aspect was mentioned and sentiment calculated
-        ranked_hospitals = hospital_data[hospital_data[sentiment_col].notna()].copy(
+        # Also filter by minimum review count
+        ranked_hospitals = hospital_data[
+            (hospital_data[sentiment_col].notna()) &
+            (hospital_data['Number of Reviews'] >= min_reviews)
+        ].copy()
+
+        if ranked_hospitals.empty:
+            st.warning(
+                f"No hospitals found with '{selected_aspect}' aspect and at least {min_reviews} reviews.")
+        else:
+            # Apply sorting based on selected option
+            if sort_option == "Highest Sentiment First":
+                ranked_hospitals.sort_values(
+                    by=sentiment_col, ascending=False, inplace=True)
+            elif sort_option == "Lowest Sentiment First":
+                ranked_hospitals.sort_values(
+                    by=sentiment_col, ascending=True, inplace=True)
+            else:  # Most Mentions First
+                ranked_hospitals.sort_values(
+                    by=mention_col, ascending=False, inplace=True)
+
+            st.subheader(
+                f"Hospitals Ranked by {selected_aspect}")
+            st.markdown(
+                f"Showing hospitals with at least {min_reviews} reviews where '{selected_aspect}' was mentioned.")
+
+            # Select and rename columns for display
+            display_cols = ['Hospital Name', sentiment_col,
+                            mention_col, 'Number of Reviews', 'Average Google Score']
+            display_df = ranked_hospitals[display_cols].round(3)
+
+            # Color-code the sentiment column
+            def color_sentiment(val):
+                if pd.isna(val):
+                    return ''
+                color = 'green' if val > 0.2 else 'red' if val < -0.2 else 'orange'
+                return f'background-color: {color}; color: white'
+
+            styled_df = display_df.style.applymap(
+                color_sentiment, subset=[sentiment_col]
+            )
+
+            st.dataframe(styled_df, use_container_width=True)
+
+            # Add visualization
+            fig_ranking = px.bar(ranked_hospitals,
+                                 x='Hospital Name', y=sentiment_col,
+                                 color=sentiment_col,
+                                 color_continuous_scale=px.colors.diverging.RdYlGn,
+                                 range_color=[-1, 1],
+                                 hover_data=[
+                                     mention_col, 'Number of Reviews', 'Average Google Score'],
+                                 title=f"Hospital Rankings by {selected_aspect} Sentiment")
+            fig_ranking.update_layout(
+                xaxis_title=None, yaxis_title="Sentiment Score")
+            st.plotly_chart(fig_ranking, use_container_width=True)
+
+# === Hospital Comparison ===
+if enable_comparison:
+    st.header("Hospital Comparison")
+
+    selected_hospitals = st.multiselect(
+        "Select Hospitals to Compare",
+        options=sorted(hospital_data['Hospital Name'].unique()),
+        default=sorted(hospital_data['Hospital Name'].unique())[
+            :3] if len(hospital_data) >= 3 else []
+    )
+
+    if selected_hospitals:
+        comparison_data = hospital_data[hospital_data['Hospital Name'].isin(
+            selected_hospitals)]
+
+        # Radar chart for aspect sentiment comparison
+        st.subheader("Aspect Sentiment Comparison")
+
+        # Create a DataFrame with aspects as columns for radar chart
+        radar_data = []
+        for aspect in ASPECT_KEYWORDS.keys():
+            aspect_col = f'{aspect} Average Sentiment'
+            for _, hospital in comparison_data.iterrows():
+                hospital_name = hospital['Hospital Name']
+                sentiment = hospital.get(aspect_col, np.nan)
+                # Scale sentiment from [-1,1] to [0,1] for radar chart
+                scaled_sentiment = (sentiment + 1) / \
+                    2 if not pd.isna(sentiment) else 0
+                radar_data.append({
+                    'Hospital': hospital_name,
+                    'Aspect': aspect,
+                    'Sentiment': scaled_sentiment
+                })
+
+        radar_df = pd.DataFrame(radar_data)
+
+        # Create radar chart with plotly
+        fig_radar = px.line_polar(
+            radar_df, r='Sentiment', theta='Aspect', color='Hospital',
+            line_close=True, range_r=[0, 1],
+            title="Hospital Sentiment Comparison by Aspect"
         )
+        st.plotly_chart(fig_radar, use_container_width=True)
 
-        # Sort by the selected aspect's average sentiment
-        ranked_hospitals.sort_values(
-            by=sentiment_col, ascending=False, inplace=True)
+        # Direct metric comparison
+        st.subheader("Key Metrics Comparison")
 
-        st.subheader(
-            f"Hospitals Ranked by Average Sentiment for '{selected_aspect}'")
-        st.markdown(
-            f"Showing hospitals where '{selected_aspect}' was mentioned, sorted by the average sentiment expressed towards it.")
+        # Create bar charts for key metrics
+        fig_google = px.bar(
+            comparison_data, x='Hospital Name', y='Average Google Score',
+            title="Average Google Score Comparison"
+        )
+        st.plotly_chart(fig_google, use_container_width=True)
 
-        # Select and rename columns for display
-        display_cols = ['Hospital Name', sentiment_col,
-                        mention_col, 'Number of Reviews', 'Average Google Score']
-        display_df = ranked_hospitals[display_cols].round(3)
+        fig_sentiment = px.bar(
+            comparison_data, x='Hospital Name', y='Average Review Sentiment (VADER)',
+            title="Average VADER Sentiment Comparison"
+        )
+        st.plotly_chart(fig_sentiment, use_container_width=True)
 
-        st.dataframe(display_df, use_container_width=True)
-
+        # Show full comparison data table
+        st.subheader("Detailed Comparison Data")
+        st.dataframe(comparison_data.round(3), use_container_width=True)
 
 st.markdown("---")
-st.markdown("Dashboard developed by [CSEMP144]")
-st.markdown("Data Source: [Google Reviews]")
-st.markdown("Data Collection Methods: [Web Scraping, Free APIs, Manual Entry]")
+st.markdown("Dashboard developed by [Your Name/Organization]")
